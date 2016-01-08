@@ -43,7 +43,7 @@ from linaro_django_pagination.middleware import PaginationMiddleware
 
 
 class HttpRequest(DjangoHttpRequest):
-     page = lambda self, suffix: 1
+    page = lambda self, suffix: 1
 
 
 class CommonTestCase(SimpleTestCase):

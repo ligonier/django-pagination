@@ -17,8 +17,9 @@ env:
     - DJANGO_VERSION=1.9
 install:
   - pip install 'coverage<4' # coverage>=4 has issues with python3
-  - pip install -q Django==$DJANGO_VERSION coveralls
+  - pip install -q Django==$DJANGO_VERSION coveralls flake8
   - python setup.py egg_info
+before_script: flake8
 script: coverage run --source='linaro_django_pagination' --omit *runner*,*test_project* setup.py test
 after_success:
   - coveralls

@@ -29,7 +29,7 @@
 
 
 from django.conf.urls.defaults import (
-    patterns, url, include, handler500, handler404)
+    patterns, url)
 
 urlpatterns = patterns(
     'example.views',
