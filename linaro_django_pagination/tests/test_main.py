@@ -317,10 +317,10 @@ class InfinitePaginatorTestCase(SimpleTestCase):
         self.assertEqual(self.p.page(3).end_index(), 6)
 
     def test_page_has_next(self):
-        self.assertTrue(self.p.page(3).has_next(), True)
+        self.assertTrue(self.p.page(3).has_next())
 
     def test_page_has_previous(self):
-        self.assertTrue(self.p.page(3).has_previous(), True)
+        self.assertTrue(self.p.page(3).has_previous())
 
     def test_page_next_link(self):
         self.assertEqual(self.p.page(3).next_link(), '/bacon/page/4')
@@ -361,10 +361,10 @@ class FinitePaginatorTestCase(SimpleTestCase):
         self.assertEqual(self.p.page(3).end_index(), 6)
 
     def test_page_has_next(self):
-        self.assertTrue(self.p.page(3).has_next(), True)
+        self.assertTrue(self.p.page(3).has_next())
 
     def test_page_has_previous(self):
-        self.assertTrue(self.p.page(3).has_previous(), True)
+        self.assertTrue(self.p.page(3).has_previous())
 
     def test_page_next_link(self):
         self.assertEqual(self.p.page(3).next_link(), '/bacon/page/4')
@@ -373,19 +373,19 @@ class FinitePaginatorTestCase(SimpleTestCase):
         self.assertEqual(self.p.page(3).previous_link(), '/bacon/page/2')
 
     def test_on_start_page_repr(self):
-        self.assertEqual(repr(self.p.page(2)), '<Page 2>')
+        self.assertEqual(repr(self.p.page(1)), '<Page 1>')
 
-    def test_on_start_has_no_next(self):
-        self.assertTrue(self.p.page(2).has_next(), False)
+    def test_on_start_has_next(self):
+        self.assertTrue(self.p.page(1).has_next())
 
-    def test_on_start_has_previous(self):
-        self.assertTrue(self.p.page(2).has_previous(), True)
+    def test_on_start_has_no_previous(self):
+        self.assertFalse(self.p.page(1).has_previous())
 
     def test_on_start_has_next_link(self):
-        self.assertEqual(self.p.page(2).next_link(), '/bacon/page/3')
+        self.assertEqual(self.p.page(1).next_link(), '/bacon/page/2')
 
-    def test_on_start_has_previous_link(self):
-        self.assertEqual(self.p.page(2).previous_link(), '/bacon/page/1')
+    def test_on_start_has_no_previous_link(self):
+        self.assertIsNone(self.p.page(1).previous_link())
 
 
 class MiddlewareTestCase(SimpleTestCase):
