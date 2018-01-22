@@ -27,23 +27,37 @@
 # THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+from contextlib import contextmanager
 
-from django.core.paginator import Paginator
-from django.http import HttpRequest as DjangoHttpRequest
-from django.template import Template, Context
+from django.core.exceptions import ImproperlyConfigured
+from django.core.paginator import Paginator, PageNotAnInteger, EmptyPage
+from django.http import HttpRequest as DjangoHttpRequest, Http404, QueryDict
+from django.template import Template, Context, TemplateSyntaxError
 
 try:
     from django.test import SimpleTestCase
 except ImportError:  # Django 1.2 compatible
     from django.test import TestCase as SimpleTestCase
 
-from linaro_django_pagination.paginator import InfinitePaginator, FinitePaginator
+from linaro_django_pagination.paginator import InfinitePaginator, FinitePaginator, InfinitePage
 from linaro_django_pagination.templatetags.pagination_tags import paginate
-from linaro_django_pagination.middleware import PaginationMiddleware
+from linaro_django_pagination.middleware import PaginationMiddleware, get_page
+from linaro_django_pagination import settings
 
 
 class HttpRequest(DjangoHttpRequest):
-     page = lambda self, suffix: 1
+    page = get_page
+
+
+@contextmanager
+def override_app_setting(key, value):
+    """
+    Overrides application setting and restores it at the end
+    """
+    restore_value = getattr(settings, key)
+    setattr(settings, key, value)
+    yield
+    setattr(settings, key, restore_value)
 
 
 class CommonTestCase(SimpleTestCase):
@@ -256,6 +270,14 @@ class SpecialTestCase(SimpleTestCase):
             [1, 2, 3, 4, None, 7, 8, 9, 10],
         )
 
+    def test_negative_window(self):
+        p = Paginator(range(20), 2)
+        self.assertRaises(ValueError, paginate, {'paginator': p, 'page_obj': p.page(1)}, window=-1)
+
+    def test_negative_margin(self):
+        p = Paginator(range(20), 2)
+        self.assertRaises(ValueError, paginate, {'paginator': p, 'page_obj': p.page(1)}, margin=-1)
+
 
 class TemplateRenderingTestCase(SimpleTestCase):
     def test_default_tag_options(self):
@@ -272,11 +294,45 @@ class TemplateRenderingTestCase(SimpleTestCase):
             t.render(Context({'var': range(21), 'request': HttpRequest()})),
         )
 
-    def test_orphans_option(self):
+    def test_paginate_by_as_variable_option(self):
         t = Template("{% load pagination_tags %}{% autopaginate var by %}{% paginate %}")
         content = t.render(Context({'var': range(21), 'by': 20, 'request': HttpRequest()}))
         self.assertIn('<div class="pagination">', content)
         self.assertIn('<a href="?page=2"', content)
+
+    def test_orphans_option(self):
+        """
+        With 23 items, per_page=10, and orphans=3, there will be two pages; the first page with 10 items
+        and the second (and last) page with 13 items.
+
+        Ref: https://docs.djangoproject.com/en/stable/topics/pagination/#optional-arguments
+        """
+        t = Template("{% load pagination_tags %}{% autopaginate var 10 3 as foo %}{{ foo|join:',' }}")
+        request = HttpRequest()
+        items = range(23)
+
+        request.GET = QueryDict('page=1')
+        content = t.render(Context({'var': items, 'request': request}))
+        # the first page with 10 items -- 0..9
+        page_items = [str(x) for x in range(10)]
+        self.assertEqual(content, ','.join(page_items))
+
+        request.GET = QueryDict('page=2')
+        content = t.render(Context({'var': items, 'request': request}))
+        # the last page with 13 items -- 10..22
+        page_items = [str(x) for x in range(10, 23)]
+        self.assertEqual(content, ','.join(page_items))
+
+    def test_variable_orphans_option(self):
+        t = Template("{% load pagination_tags %}{% autopaginate var 10 orphans as foo %}{{ foo|join:',' }}")
+        request = HttpRequest()
+        items = range(23)
+
+        request.GET = QueryDict('page=2')
+        content = t.render(Context({'var': items, 'orphans': 3, 'request': request}))
+        # the last page with 13 items -- 10..22
+        page_items = [str(x) for x in range(10, 23)]
+        self.assertEqual(content, ','.join(page_items))
 
     def test_as_option(self):
         t = Template("{% load pagination_tags %}{% autopaginate var by as foo %}{{ foo }}")
@@ -293,6 +349,59 @@ class TemplateRenderingTestCase(SimpleTestCase):
         self.assertIn('<a href="?page_var2=2"', content)
         self.assertIn('<a href="?page_var=2"', content)
 
+    def test_require_request_context(self):
+        t = Template("{% load pagination_tags %}{% autopaginate var 20 %}")
+        self.assertRaises(ImproperlyConfigured, t.render, Context({'var': range(21)}))
+
+    def test_invalid_page(self):
+        t = Template("{% load pagination_tags %}{% autopaginate var 10 as foo %}"
+                     "{% if invalid_page %}INVALID_PAGE{% endif %}")
+        request = HttpRequest()
+        request.GET = QueryDict('page=42')
+        content = t.render(Context({'var': range(21), 'request': request}))
+        self.assertEqual(content, 'INVALID_PAGE')
+
+    def test_invalid_page_raises_404(self):
+        with override_app_setting('INVALID_PAGE_RAISES_404', True):
+            t = Template("{% load pagination_tags %}{% autopaginate var 10 %}")
+            request = HttpRequest()
+            request.GET = QueryDict('page=100')
+            self.assertRaises(Http404, t.render, Context({'var': range(21), 'request': request}))
+
+    def test_invalid_syntax(self):
+        self.assertRaises(TemplateSyntaxError, Template, "{% load pagination_tags %}{% autopaginate %}")
+        self.assertRaises(TemplateSyntaxError, Template,
+                          "{% load pagination_tags %}{% autopaginate var %}{% paginate using %}")
+        self.assertRaises(TemplateSyntaxError, Template,
+                          "{% load pagination_tags %}{% autopaginate var %}{% paginate something %}")
+
+    def test_paginate_custom_template(self):
+        t = Template("{% load pagination_tags %}{% autopaginate var 20 %}"
+                     "{% paginate using 'custom_pagination.html' %}")
+        content = t.render(Context({'var': range(21), 'request': HttpRequest()}))
+        self.assertIn('<div class="custom_pagination">', content)
+        self.assertIn('<a href="?page=2"', content)
+
+    def test_paginate_custom_template_fallback(self):
+        t = Template("{% load pagination_tags %}{% autopaginate var 20 %}"
+                     "{% paginate using 'not_exists_template.html' %}")
+        content = t.render(Context({'var': range(21), 'request': HttpRequest()}))
+        self.assertIn('<div class="pagination">', content)
+        self.assertIn('<a href="?page=2"', content)
+
+    def test_keeping_get_vars_in_paginate(self):
+        t = Template("{% load pagination_tags %}{% autopaginate var 20 %}{% paginate %}")
+
+        request = HttpRequest()
+        request.GET = QueryDict('foo=bar&baz=qux&page=1')
+        content = t.render(Context({'var': range(21), 'request': request}))
+
+        self.assertIn('<div class="pagination">', content)
+        self.assertTrue(
+            '<a href="?page=2&amp;foo=bar&amp;baz=qux"' in content or
+            '<a href="?page=2&amp;baz=qux&amp;foo=bar"' in content
+        )
+
 
 class InfinitePaginatorTestCase(SimpleTestCase):
     def setUp(self):
@@ -304,8 +413,20 @@ class InfinitePaginatorTestCase(SimpleTestCase):
             "<class 'linaro_django_pagination.paginator.InfinitePaginator'>",
         )
 
-    def test_validate_number(self):
+    def test_valid_page_number(self):
         self.assertEqual(self.p.validate_number(2), 2)
+
+    def test_invalid_page_number(self):
+        self.assertRaises(PageNotAnInteger, self.p.validate_number, 'six')
+
+    def test_non_positive_page_number(self):
+        self.assertRaises(EmptyPage, self.p.validate_number, 0)
+        self.assertRaises(EmptyPage, self.p.validate_number, -1)
+        self.assertRaises(EmptyPage, self.p.validate_number, -100)
+
+    def test_page_exceeding(self):
+        self.assertRaises(EmptyPage, self.p.page, 0)
+        self.assertRaises(EmptyPage, self.p.page, 11)
 
     def test_orphans(self):
         self.assertEqual(self.p.orphans, 0)
@@ -317,10 +438,10 @@ class InfinitePaginatorTestCase(SimpleTestCase):
         self.assertEqual(self.p.page(3).end_index(), 6)
 
     def test_page_has_next(self):
-        self.assertTrue(self.p.page(3).has_next(), True)
+        self.assertTrue(self.p.page(3).has_next())
 
     def test_page_has_previous(self):
-        self.assertTrue(self.p.page(3).has_previous(), True)
+        self.assertTrue(self.p.page(3).has_previous())
 
     def test_page_next_link(self):
         self.assertEqual(self.p.page(3).next_link(), '/bacon/page/4')
@@ -333,6 +454,29 @@ class InfinitePaginatorTestCase(SimpleTestCase):
 
     def test_first_page_which_has_no_previous_page(self):
         self.assertFalse(self.p.page(1).has_previous())
+
+    def test_last_page_which_has_no_next_link(self):
+        self.assertIsNone(self.p.page(10).next_link())
+
+    def test_first_page_which_has_no_previous_link(self):
+        self.assertIsNone(self.p.page(1).previous_link())
+
+    def test_not_implemented_count(self):
+        self.assertRaises(NotImplementedError, getattr, self.p, 'count')
+
+    def test_not_implemented_num_pages(self):
+        self.assertRaises(NotImplementedError, getattr, self.p, 'num_pages')
+
+    def test_not_implemented_page_range(self):
+        self.assertRaises(NotImplementedError, getattr, self.p, 'page_range')
+
+    def test_paginator_with_allowed_empty_first_page(self):
+        p = InfinitePaginator([], 1, allow_empty_first_page=True)
+        self.assertRaises(EmptyPage, p.page, -2)
+        self.assertRaises(EmptyPage, p.page, -1)
+        self.assertRaises(EmptyPage, p.page, 0)
+        self.assertIsInstance(p.page(1), InfinitePage)
+        self.assertRaises(EmptyPage, p.page, 2)
 
 
 class FinitePaginatorTestCase(SimpleTestCase):
@@ -361,10 +505,10 @@ class FinitePaginatorTestCase(SimpleTestCase):
         self.assertEqual(self.p.page(3).end_index(), 6)
 
     def test_page_has_next(self):
-        self.assertTrue(self.p.page(3).has_next(), True)
+        self.assertTrue(self.p.page(3).has_next())
 
     def test_page_has_previous(self):
-        self.assertTrue(self.p.page(3).has_previous(), True)
+        self.assertTrue(self.p.page(3).has_previous())
 
     def test_page_next_link(self):
         self.assertEqual(self.p.page(3).next_link(), '/bacon/page/4')
@@ -373,27 +517,63 @@ class FinitePaginatorTestCase(SimpleTestCase):
         self.assertEqual(self.p.page(3).previous_link(), '/bacon/page/2')
 
     def test_on_start_page_repr(self):
-        self.assertEqual(repr(self.p.page(2)), '<Page 2>')
+        self.assertEqual(repr(self.p.page(1)), '<Page 1>')
 
-    def test_on_start_has_no_next(self):
-        self.assertTrue(self.p.page(2).has_next(), False)
+    def test_on_start_has_next(self):
+        self.assertTrue(self.p.page(1).has_next())
 
-    def test_on_start_has_previous(self):
-        self.assertTrue(self.p.page(2).has_previous(), True)
+    def test_on_start_has_no_previous(self):
+        self.assertFalse(self.p.page(1).has_previous())
 
     def test_on_start_has_next_link(self):
-        self.assertEqual(self.p.page(2).next_link(), '/bacon/page/3')
+        self.assertEqual(self.p.page(1).next_link(), '/bacon/page/2')
 
-    def test_on_start_has_previous_link(self):
-        self.assertEqual(self.p.page(2).previous_link(), '/bacon/page/1')
+    def test_on_start_has_no_previous_link(self):
+        self.assertIsNone(self.p.page(1).previous_link())
+
+    def test_validate_number_with_allowed_empty_first_page(self):
+        p = FinitePaginator([], 1, allow_empty_first_page=True)
+        self.assertRaises(EmptyPage, p.validate_number, -2)
+        self.assertRaises(EmptyPage, p.validate_number, -1)
+        self.assertRaises(EmptyPage, p.validate_number, 0)
+        self.assertEqual(p.validate_number(1), 1)
+        self.assertRaises(EmptyPage, p.validate_number, 2)
 
 
 class MiddlewareTestCase(SimpleTestCase):
     """
     Test middleware
     """
-    def test_get_page_in_request(self):
-        middleware = PaginationMiddleware()
-        request = DjangoHttpRequest()
-        middleware.process_request(request)
-        self.assertEqual(request.page(''), 1)
+    def setUp(self):
+        self.middleware = PaginationMiddleware()
+        self.request = DjangoHttpRequest()
+
+    def test_get_page_default(self):
+        self.middleware.process_request(self.request)
+        self.assertEqual(self.request.page(''), 1)
+
+    def test_get_page(self):
+        self.request.GET = QueryDict('page=2')
+
+        self.middleware.process_request(self.request)
+        self.assertEqual(self.request.page(''), 2)
+
+    def test_post_page(self):
+        self.request.POST = QueryDict('page=3')
+        self.middleware.process_request(self.request)
+        self.assertEqual(self.request.page(''), 3)
+
+    def test_get_page_suffix(self):
+        self.request.GET = QueryDict('page_suffix1=4')
+        self.middleware.process_request(self.request)
+        self.assertEqual(self.request.page('_suffix1'), 4)
+
+    def test_post_page_suffix(self):
+        self.request.POST = QueryDict('page_suffix2=5')
+        self.middleware.process_request(self.request)
+        self.assertEqual(self.request.page('_suffix2'), 5)
+
+    # TODO: need tests for using page with upload handlers
+    # See details in usage doc.
+    def _need_test_upload_handlers(self):
+        pass
