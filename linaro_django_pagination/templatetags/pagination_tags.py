@@ -282,6 +282,7 @@ def paginate(context, window=DEFAULT_WINDOW, margin=DEFAULT_MARGIN):
         if window_end > paginator.num_pages:
             window_start = window_start - (window_end - paginator.num_pages)
             window_end = paginator.num_pages
+        page_range = range(page_range[0], page_range[-1]+1)  # convert from xrange to range so we can slice it            
         pages = page_range[window_start:window_end]
 
         # figure margin and add elipses
