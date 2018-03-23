@@ -34,9 +34,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.paginator import Paginator, InvalidPage
 from django.http import Http404
 from django.template import (
-    Context,
     Library,
     Node,
+    RequestContext,
     TemplateSyntaxError,
     Variable,
     loader,
@@ -47,11 +47,22 @@ try:
 except ImportError:     # Django < 1.8
     from django.template import TOKEN_BLOCK
 
-from django.template.loader import select_template
 from django.utils.text import unescape_string_literal
 
 # TODO, import this normally later on
-from linaro_django_pagination.settings import *
+from linaro_django_pagination.settings import(
+    DEFAULT_MARGIN,
+    DEFAULT_PAGINATION,
+    DEFAULT_ORPHANS,
+    INVALID_PAGE_RAISES_404,
+    DEFAULT_WINDOW,
+    DISABLE_LINK_FOR_FIRST_PAGE,
+    DISPLAY_DISABLED_NEXT_LINK,
+    DISPLAY_DISABLED_PREVIOUS_LINK,
+    DISPLAY_PAGE_LINKS,
+    NEXT_LINK_DECORATOR,
+    PREVIOUS_LINK_DECORATOR
+)
 
 
 def do_autopaginate(parser, token):
@@ -191,6 +202,8 @@ class PaginateNode(Node):
         new_context = paginate(context)
         if self.template:
             template_list.insert(0, self.template)
+        if isinstance(context, RequestContext):
+            context = context.flatten()
         context.update(new_context)
         return loader.render_to_string(template_list, context)
 
