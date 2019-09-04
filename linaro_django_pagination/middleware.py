@@ -35,7 +35,11 @@ def get_page(self, suffix):
     integer representing the current page.
     """
     try:
-        return int(self.GET['page%s' % suffix])
+        if self.method == 'POST':
+            params = self.POST
+        else:
+            params = self.GET
+        return int(params['page%s' % suffix])
     except (KeyError, ValueError, TypeError):
         return 1
 
