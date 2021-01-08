@@ -42,10 +42,7 @@ from django.template import (
     loader,
 )
 
-try:
-    from django.template.base import TOKEN_BLOCK
-except ImportError:     # Django < 1.8
-    from django.template import TOKEN_BLOCK
+from django.template.base import TokenType
 
 from django.utils.text import unescape_string_literal
 
@@ -74,7 +71,7 @@ def do_autopaginate(parser, token):
         autopaginate QUERYSET [PAGINATE_BY] [ORPHANS] [as NAME]
     """
     # Check whether there are any other autopaginations are later in this template
-    expr = lambda obj: (obj.token_type == TOKEN_BLOCK and \
+    expr = lambda obj: (obj.token_type == TokenType.BLOCK and \
         len(obj.split_contents()) > 0 and obj.split_contents()[0] == "autopaginate")
     multiple_paginations = len([tok for tok in parser.tokens if expr(tok)]) > 0
 
